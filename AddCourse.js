@@ -1,109 +1,139 @@
 import React, { useState, useEffect } from 'react';
 
-const AddCourse = ({ institutions }) => {
-    const [institution, setInstitution] = useState('');
-    const [faculty, setFaculty] = useState('');
+const AddCourse = () => {
+    const [currentInstitute, setCurrentInstitute] = useState(null);
+    const [faculties, setFaculties] = useState([]);
+    const [selectedFaculty, setSelectedFaculty] = useState('');
     const [courseName, setCourseName] = useState('');
     const [courseCode, setCourseCode] = useState('');
     const [minCredits, setMinCredits] = useState('');
-    const [availableFaculties, setAvailableFaculties] = useState([]);
+    const [courseDescription, setCourseDescription] = useState('');
     const [courses, setCourses] = useState([]);
-    const [allFaculties, setAllFaculties] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState('');
 
-    const fetchFaculties = async (institutionId) => {
-        try {
-            const response = await fetch(`http://localhost:8081/api/faculties`);
-            if (!response.ok) {
-                throw new Error('Failed to fetch faculties');
-            }
-            const data = await response.json();
-            // Filter faculties by institution
-            const filteredFaculties = data.filter(f => f.institutionId === institutionId);
-            setAvailableFaculties(filteredFaculties);
-        } catch (error) {
-            console.error('Error fetching faculties:', error);
-            alert('Error fetching faculties');
+    // Get current institute and load data
+    useEffect(() => {
+        const instituteUser = JSON.parse(localStorage.getItem('instituteUser'));
+        if (instituteUser) {
+            setCurrentInstitute(instituteUser);
+            fetchFaculties(instituteUser.id);
+            fetchCourses(instituteUser.id);
         }
-    };
+    }, []);
 
-    const fetchAllFaculties = async () => {
+    // Fetch faculties for current institute
+    const fetchFaculties = async (instituteId) => {
         try {
             const response = await fetch('http://localhost:8081/api/faculties');
-            if (!response.ok) {
-                throw new Error('Failed to fetch faculties');
-            }
+            if (!response.ok) throw new Error('Failed to fetch faculties');
             const data = await response.json();
-            setAllFaculties(data);
+            
+            // Filter faculties for current institute only
+            const instituteFaculties = data.filter(faculty => faculty.institutionId === instituteId);
+            setFaculties(instituteFaculties);
         } catch (error) {
-            console.error('Error fetching all faculties:', error);
+            console.error('Error fetching faculties:', error);
+            setMessage('Failed to load faculties');
         }
     };
 
-    const fetchCourses = async () => {
+    // Fetch courses for current institute
+    const fetchCourses = async (instituteId) => {
         try {
-            setLoading(true);
             const response = await fetch('http://localhost:8081/api/courses');
-            if (!response.ok) {
-                throw new Error('Failed to fetch courses');
-            }
+            if (!response.ok) throw new Error('Failed to fetch courses');
             const data = await response.json();
-            setCourses(data);
+            
+            // Filter courses for current institute and enrich with faculty names
+            const instituteCourses = data.filter(course => course.institutionId === instituteId);
+            
+            // Enrich with faculty names
+            const enrichedCourses = await Promise.all(
+                instituteCourses.map(async (course) => {
+                    try {
+                        const facultyResponse = await fetch(`http://localhost:8081/api/faculties/${course.facultyId}`);
+                        if (facultyResponse.ok) {
+                            const faculty = await facultyResponse.json();
+                            return {
+                                ...course,
+                                faculty_name: faculty.name
+                            };
+                        }
+                        return course;
+                    } catch (error) {
+                        return course;
+                    }
+                })
+            );
+            
+            setCourses(enrichedCourses);
         } catch (error) {
             console.error('Error fetching courses:', error);
-            alert('Error fetching courses');
-        } finally {
-            setLoading(false);
         }
     };
 
     const handleAddCourse = async (e) => {
         e.preventDefault();
-        if (!institution || !faculty || !courseName || !courseCode || !minCredits) {
-            alert("Please fill all fields");
+        
+        if (!currentInstitute) {
+            setMessage('Error: No institute found. Please log in again.');
             return;
         }
 
+        if (!selectedFaculty || !courseName || !courseCode || !minCredits) {
+            setMessage("Please fill all required fields");
+            return;
+        }
+
+        setLoading(true);
+        setMessage('');
+
         try {
-            setLoading(true);
+            // Create the course data object with ALL required fields
+            const courseData = {
+                facultyId: selectedFaculty,
+                name: courseName, // This is the field that was missing
+                code: courseCode,
+                minCredits: parseInt(minCredits),
+                description: courseDescription || '', // Ensure description is never undefined
+                institutionId: currentInstitute.id
+            };
+
+            console.log('Sending course data:', courseData); // Debug log
+
             const response = await fetch('http://localhost:8081/api/courses', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    facultyId: faculty,
-                    name: courseName, // Changed from courseName to name for consistency
-                    code: courseCode, // Changed from courseCode to code for consistency
-                    minCredits: parseInt(minCredits),
-                    institutionId: institution
-                }),
+                body: JSON.stringify(courseData),
             });
 
-            const result = await response.json();
+            const data = await response.json();
+            console.log('Response from server:', data); // Debug log
 
             if (response.ok) {
-                alert("Course added successfully");
+                setMessage("✅ Course added successfully!");
                 resetFields();
-                fetchCourses(); // Refresh the course list
+                fetchCourses(currentInstitute.id);
             } else {
-                alert(result.error || 'Failed to add course');
+                setMessage(`❌ Failed to add course: ${data.error || 'Unknown error'}`);
             }
         } catch (error) {
             console.error('Error adding course:', error);
-            alert('Failed to add course - check console for details');
+            setMessage('❌ Network error. Please try again.');
         } finally {
             setLoading(false);
         }
     };
 
     const resetFields = () => {
-        setInstitution('');
-        setFaculty('');
+        setSelectedFaculty('');
         setCourseName('');
         setCourseCode('');
         setMinCredits('');
-        setAvailableFaculties([]);
+        setCourseDescription('');
     };
 
     const handleDeleteCourse = async (courseId) => {
@@ -117,195 +147,242 @@ const AddCourse = ({ institutions }) => {
             });
 
             if (response.ok) {
-                alert('Course deleted successfully.');
-                fetchCourses(); // Refresh the course list
+                setMessage('✅ Course deleted successfully.');
+                fetchCourses(currentInstitute.id);
             } else {
-                const result = await response.json();
-                alert(result.error || 'Failed to delete course.');
+                setMessage('❌ Failed to delete course.');
             }
         } catch (error) {
             console.error('Error deleting course:', error);
-            alert('Failed to delete course.');
+            setMessage('❌ Failed to delete course');
         }
-    };
-
-    useEffect(() => {
-        if (institution) {
-            fetchFaculties(institution);
-        } else {
-            setAvailableFaculties([]);
-            setFaculty('');
-        }
-    }, [institution]);
-
-    useEffect(() => {
-        fetchCourses();
-        fetchAllFaculties();
-    }, []);
-
-    // Helper function to find institution and faculty names
-    const getInstitutionAndFacultyNames = (course) => {
-        const institutionObj = institutions.find(inst => inst.id === course.institutionId);
-        const facultyObj = allFaculties.find(f => f.id === course.facultyId);
-        
-        return {
-            institutionName: institutionObj?.name || 'N/A',
-            facultyName: facultyObj?.name || 'N/A'
-        };
     };
 
     return (
-        <div style={{ padding: '20px' }}>
-            <h2>Add Course</h2>
-            <form onSubmit={handleAddCourse} style={{ marginBottom: '30px', padding: '20px', border: '1px solid #ddd', borderRadius: '5px' }}>
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', marginBottom: '5px' }}>Institution: </label>
-                    <select 
-                        value={institution} 
-                        onChange={(e) => setInstitution(e.target.value)} 
-                        required
-                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-                    >
-                        <option value="">Select Institution</option>
-                        {institutions.map(inst => (
-                            <option key={inst.id} value={inst.id}>
-                                {inst.name}
-                            </option>
-                        ))}
-                    </select>
+        <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+            <h2>Add New Course</h2>
+            
+            {message && (
+                <div style={{ 
+                    padding: '10px', 
+                    margin: '10px 0', 
+                    backgroundColor: message.includes('✅') ? '#e8f5e8' : '#ffebee',
+                    color: message.includes('✅') ? '#2e7d32' : '#c62828',
+                    borderRadius: '4px',
+                    border: `1px solid ${message.includes('✅') ? '#c8e6c9' : '#ffcdd2'}`
+                }}>
+                    {message}
+                </div>
+            )}
+
+            {/* Current Institute Info */}
+            {currentInstitute && (
+                <div style={{ 
+                    padding: '15px', 
+                    backgroundColor: '#e3f2fd', 
+                    borderRadius: '8px',
+                    marginBottom: '20px',
+                    border: '1px solid #bbdefb'
+                }}>
+                    <strong>Your Institution:</strong> {currentInstitute.name}
+                </div>
+            )}
+
+            {/* Add Course Form */}
+            <form onSubmit={handleAddCourse} style={{ 
+                marginBottom: '30px', 
+                padding: '20px', 
+                border: '1px solid #ddd', 
+                borderRadius: '8px',
+                backgroundColor: '#f9f9f9'
+            }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                    {/* Faculty Selection */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Faculty *
+                        </label>
+                        <select 
+                            value={selectedFaculty} 
+                            onChange={(e) => setSelectedFaculty(e.target.value)} 
+                            required
+                            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        >
+                            <option value="">Select Faculty</option>
+                            {faculties.map(faculty => (
+                                <option key={faculty.id} value={faculty.id}>
+                                    {faculty.name}
+                                </option>
+                            ))}
+                        </select>
+                        {faculties.length === 0 && (
+                            <small style={{ color: '#dc3545' }}>
+                                No faculties available. Please add faculties first.
+                            </small>
+                        )}
+                    </div>
+
+                    {/* Course Name */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Course Name *
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g., Bachelor of Computer Science"
+                            value={courseName}
+                            onChange={(e) => setCourseName(e.target.value)}
+                            required
+                            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        />
+                    </div>
                 </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', marginBottom: '5px' }}>Faculty: </label>
-                    <select 
-                        value={faculty} 
-                        onChange={(e) => setFaculty(e.target.value)} 
-                        required 
-                        disabled={!institution}
-                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc', backgroundColor: !institution ? '#f5f5f5' : 'white' }}
-                    >
-                        <option value="">Select Faculty</option>
-                        {availableFaculties.map(f => (
-                            <option key={f.id} value={f.id}>
-                                {f.name}
-                            </option>
-                        ))}
-                    </select>
-                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                    {/* Course Code */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Course Code *
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="e.g., BCS101"
+                            value={courseCode}
+                            onChange={(e) => setCourseCode(e.target.value)}
+                            required
+                            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        />
+                    </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', marginBottom: '5px' }}>Course Name: </label>
-                    <input
-                        type="text"
-                        placeholder="Course Name"
-                        value={courseName}
-                        onChange={(e) => setCourseName(e.target.value)}
-                        required
-                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-                    />
-                </div>
+                    {/* Minimum Credits */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Minimum Credits *
+                        </label>
+                        <input
+                            type="number"
+                            placeholder="e.g., 120"
+                            value={minCredits}
+                            onChange={(e) => setMinCredits(e.target.value)}
+                            required
+                            min="1"
+                            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        />
+                    </div>
 
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', marginBottom: '5px' }}>Course Code: </label>
-                    <input
-                        type="text"
-                        placeholder="Course Code"
-                        value={courseCode}
-                        onChange={(e) => setCourseCode(e.target.value)}
-                        required
-                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-                    />
-                </div>
-
-                <div style={{ marginBottom: '15px' }}>
-                    <label style={{ display: 'block', marginBottom: '5px' }}>Minimum Credits: </label>
-                    <input
-                        type="number"
-                        placeholder="Minimum Credits"
-                        value={minCredits}
-                        onChange={(e) => setMinCredits(e.target.value)}
-                        required
-                        min="1"
-                        style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
-                    />
+                    {/* Course Description */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                            Description
+                        </label>
+                        <input
+                            type="text"
+                            placeholder="Course description"
+                            value={courseDescription}
+                            onChange={(e) => setCourseDescription(e.target.value)}
+                            style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
+                        />
+                    </div>
                 </div>
 
                 <button 
                     type="submit" 
-                    disabled={loading}
+                    disabled={loading || faculties.length === 0}
                     style={{
-                        padding: '10px 20px',
-                        backgroundColor: loading ? '#6c757d' : '#007bff',
+                        padding: '12px 24px',
+                        backgroundColor: (loading || faculties.length === 0) ? '#6c757d' : '#007bff',
                         color: 'white',
                         border: 'none',
                         borderRadius: '4px',
-                        cursor: loading ? 'not-allowed' : 'pointer'
+                        cursor: (loading || faculties.length === 0) ? 'not-allowed' : 'pointer',
+                        fontSize: '16px',
+                        fontWeight: 'bold'
                     }}
                 >
                     {loading ? 'Adding Course...' : 'Add Course'}
                 </button>
+
+                {faculties.length === 0 && (
+                    <div style={{ marginTop: '10px', color: '#dc3545' }}>
+                        <strong>Note:</strong> You need to add faculties first before you can add courses.
+                    </div>
+                )}
             </form>
 
-            <h3>Course List</h3>
-            {loading ? (
-                <div>Loading courses...</div>
-            ) : (
-                <table className="table" style={{ width: '100%', borderCollapse: 'collapse', marginTop: '20px' }}>
-                    <thead>
-                        <tr style={{ backgroundColor: '#f5f5f5' }}>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Institution</th>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Faculty</th>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Course Name</th>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Course Code</th>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Minimum Credits</th>
-                            <th style={{ padding: '12px', border: '1px solid #ddd' }}>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {courses.length > 0 ? (
-                            courses.map(course => {
-                                const { institutionName, facultyName } = getInstitutionAndFacultyNames(course);
-                                
-                                return (
-                                    <tr key={course.id}>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>{institutionName}</td>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>{facultyName}</td>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                                            {course.name || course.courseName || 'N/A'}
-                                        </td>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                                            {course.code || course.courseCode || 'N/A'}
-                                        </td>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                                            {course.minCredits || 'N/A'}
-                                        </td>
-                                        <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                                            <button 
-                                                onClick={() => handleDeleteCourse(course.id)}
-                                                style={{
-                                                    padding: '6px 12px',
-                                                    backgroundColor: '#dc3545',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '4px',
-                                                    cursor: 'pointer'
-                                                }}
-                                            >
-                                                Delete
-                                            </button>
-                                        </td>
-                                    </tr>
-                                );
-                            })
-                        ) : (
-                            <tr>
-                                <td colSpan="6" style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'center' }}>
-                                    No courses available.
-                                </td>
+            {/* Course List */}
+            <h3>Your Courses ({courses.length})</h3>
+            {courses.length > 0 ? (
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ 
+                        width: '100%', 
+                        borderCollapse: 'collapse',
+                        backgroundColor: 'white',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                    }}>
+                        <thead>
+                            <tr style={{ backgroundColor: '#f8f9fa' }}>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Faculty</th>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Course Name</th>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Course Code</th>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Credits</th>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Description</th>
+                                <th style={{ padding: '12px', border: '1px solid #dee2e6', textAlign: 'left' }}>Actions</th>
                             </tr>
-                        )}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {courses.map(course => (
+                                <tr key={course.id} style={{ borderBottom: '1px solid #dee2e6' }}>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                                        {course.faculty_name || 'N/A'}
+                                    </td>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6', fontWeight: 'bold' }}>
+                                        {course.name}
+                                    </td>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                                        {course.code}
+                                    </td>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                                        {course.minCredits}
+                                    </td>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                                        {course.description || 'No description'}
+                                    </td>
+                                    <td style={{ padding: '12px', border: '1px solid #dee2e6' }}>
+                                        <button 
+                                            onClick={() => handleDeleteCourse(course.id)}
+                                            style={{
+                                                padding: '6px 12px',
+                                                backgroundColor: '#dc3545',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                fontSize: '14px'
+                                            }}
+                                        >
+                                            Delete
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
+                <div style={{ 
+                    padding: '40px', 
+                    textAlign: 'center', 
+                    backgroundColor: '#f8f9fa', 
+                    border: '1px solid #dee2e6',
+                    borderRadius: '4px'
+                }}>
+                    <h4 style={{ color: '#6c757d' }}>No Courses Yet</h4>
+                    <p style={{ color: '#6c757d' }}>
+                        {faculties.length === 0 
+                            ? 'Add faculties first, then come back to add courses.' 
+                            : 'Add your first course using the form above.'}
+                    </p>
+                </div>
             )}
         </div>
     );
